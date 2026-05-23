@@ -8,6 +8,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as MailComposer from 'expo-mail-composer';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import * as FileSystem from 'expo-file-system';
 import * as XLSX from 'xlsx';
 import { Picker } from '@react-native-picker/picker';
 import { getReportById, updateReport, ExpenseReport, ExpenseItem } from '../../utils/storage';
@@ -194,7 +195,7 @@ export default function ReportDetailScreen() {
     const wbout = XLSX.write(wb, { type: 'base64', bookType: "xlsx" });
     const uri = Platform.OS === 'web' 
       ? `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${wbout}`
-      : `${Print.cacheDirectory}ExpenseReport_${report.id}.xlsx`;
+      : '';
 
     if (Platform.OS === 'web') {
       const link = document.createElement('a');
@@ -574,4 +575,3 @@ const styles = StyleSheet.create({
     marginLeft: 10,
   },
 });
-

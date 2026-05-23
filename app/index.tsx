@@ -18,9 +18,20 @@ export default function ReportListScreen() {
   };
 
   const createReport = async () => {
+    let name = '';
+    if (Platform.OS === 'web') {
+      name = window.prompt('Enter your name for the report:') || 'Employee';
+    } else {
+      // For native, we'd use an Alert with input, but simplifying for now
+      name = 'Employee';
+    }
+    
+    const monthYear = new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    const title = `${name} - ${monthYear}`;
+    
     const newReport: ExpenseReport = {
       id: Math.random().toString(36).substring(7),
-      title: `Expense Report - ${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`,
+      title: title,
       createdAt: new Date().toISOString(),
       items: [],
     };
