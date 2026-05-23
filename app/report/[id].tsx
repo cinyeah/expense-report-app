@@ -65,7 +65,6 @@ export default function ReportDetailScreen() {
     setReport(updated);
     updateReport(updated);
   };
-  };
 
   const updateItem = (itemId: string, field: keyof ExpenseItem, value: string) => {
     if (!report) return;
@@ -122,24 +121,34 @@ export default function ReportDetailScreen() {
       <html>
         <head>
           <style>
-            body { font-family: 'Helvetica', sans-serif; padding: 20px; }
-            h1 { color: #333; }
-            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-            th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
-            th { backgroundColor: #f2f2f2; }
-            .total { margin-top: 20px; font-weight: bold; font-size: 1.2em; text-align: right; }
+            body { font-family: 'Helvetica', sans-serif; padding: 40px; color: #333; }
+            .header { border-bottom: 2px solid #007bff; padding-bottom: 20px; margin-bottom: 30px; }
+            h1 { color: #007bff; margin: 0; font-size: 28px; }
+            .report-info { margin-top: 10px; color: #666; font-size: 14px; }
+            table { width: 100%; border-collapse: collapse; margin-top: 30px; }
+            th { background-color: #f8f9fa; color: #333; font-weight: bold; border-bottom: 2px solid #dee2e6; }
+            th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #eee; }
+            .amount { text-align: right; font-family: 'Courier New', monospace; }
+            .total-row { background-color: #f8f9fa; font-weight: bold; font-size: 18px; }
+            .total-label { text-align: right; }
+            .footer { margin-top: 50px; font-size: 12px; color: #999; text-align: center; border-top: 1px solid #eee; padding-top: 20px; }
           </style>
         </head>
         <body>
-          <h1>Expense Report: ${report.title}</h1>
-          <p>Date: ${new Date(report.createdAt).toLocaleDateString()}</p>
+          <div class="header">
+            <h1>Expense Report</h1>
+            <div class="report-info">
+              <strong>Title:</strong> ${report.title}<br>
+              <strong>Date:</strong> ${new Date(report.createdAt).toLocaleDateString()}
+            </div>
+          </div>
           <table>
             <thead>
               <tr>
-                <th>Date</th>
-                <th>Category</th>
-                <th>Note</th>
-                <th>Amount (USD)</th>
+                <th style="width: 15%">Date</th>
+                <th style="width: 25%">Category</th>
+                <th style="width: 40%">Note</th>
+                <th style="width: 20%" class="amount">Amount (USD)</th>
               </tr>
             </thead>
             <tbody>
@@ -147,23 +156,33 @@ export default function ReportDetailScreen() {
                 <tr>
                   <td>${item.date}</td>
                   <td>${item.category}</td>
-                  <td>${item.note || ''}</td>
-                  <td>$${parseFloat(item.amount || '0').toFixed(2)}</td>
+                  <td>${item.note || '-'}</td>
+                  <td class="amount">$${parseFloat(item.amount || '0').toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                 </tr>
               `).join('')}
+              <tr class="total-row">
+                <td colspan="3" class="total-label">TOTAL</td>
+                <td class="amount">$${totalAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+              </tr>
             </tbody>
           </table>
-          <div class="total">Total: $${totalAmount.toFixed(2)}</div>
+          <div class="footer">
+            Generated via Expense Report App | ${new Date().toLocaleString()}
+          </div>
         </body>
       </html>
     `;
 
     try {
-      const { uri } = await Print.printToFileAsync({ html });
-      if (Platform.OS === 'ios') {
-        await Sharing.shareAsync(uri);
+      const { uri, base64 } = await Print.printToFileAsync({ html, base64: Platform.OS === 'web' });
+      
+      if (Platform.OS === 'web' && base64) {
+        const link = document.createElement('a');
+        link.href = `data:application/pdf;base64,${base64}`;
+        link.download = `${report.title.replace(/\s+/g, '_')}.pdf`;
+        link.click();
       } else {
-        await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Export PDF' });
+        await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Save PDF' });
       }
     } catch (error) {
       Alert.alert('Error', 'Failed to generate PDF');
@@ -173,22 +192,40 @@ export default function ReportDetailScreen() {
   const exportToExcel = async () => {
     if (!report) return;
 
-    const data = report.items.map(item => ({
-      Date: item.date,
-      Category: item.category,
-      Note: item.note || '',
-      'Amount (USD)': parseFloat(item.amount || '0').toFixed(2)
-    }));
+    // Create a worksheet where numeric values are actual numbers
+    const rows = report.items.map(item => [
+      item.date,
+      item.category,
+      item.note || '',
+      parseFloat(item.amount || '0')
+    ]);
 
-    // Add total row
-    data.push({
-      Date: 'TOTAL',
-      Category: '',
-      Note: '',
-      'Amount (USD)': totalAmount.toFixed(2)
-    });
+    // Add header and total
+    const data = [
+      ["Date", "Category", "Note", "Amount (USD)"],
+      ...rows,
+      ["TOTAL", "", "", totalAmount]
+    ];
 
-    const ws = XLSX.utils.json_to_sheet(data);
+    const ws = XLSX.utils.aoa_to_sheet(data);
+
+    // Set column widths
+    ws['!cols'] = [
+      { wch: 15 }, // Date
+      { wch: 20 }, // Category
+      { wch: 40 }, // Note
+      { wch: 15 }  // Amount
+    ];
+
+    // Add basic number formatting for the amount column (D)
+    const range = XLSX.utils.decode_range(ws['!ref'] || "A1");
+    for (let i = 1; i <= range.e.r; i++) {
+      const cell = ws[XLSX.utils.encode_cell({ r: i, c: 3 })];
+      if (cell && typeof cell.v === 'number') {
+        cell.z = '"$"#,##0.00';
+      }
+    }
+
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Expenses");
     
@@ -200,12 +237,10 @@ export default function ReportDetailScreen() {
     if (Platform.OS === 'web') {
       const link = document.createElement('a');
       link.href = uri;
-      link.download = `ExpenseReport_${report.title.replace(/\s+/g, '_')}.xlsx`;
+      link.download = `${report.title.replace(/\s+/g, '_')}.xlsx`;
       link.click();
     } else {
-      // For native, we'd need expo-file-system to write the file, but we can try sharing the base64 if supported
-      // Better approach for native is to use expo-file-system
-      Alert.alert('Note', 'Excel export is best supported on Web. For mobile, please use PDF export.');
+      Alert.alert('Note', 'Excel export is best supported on Web.');
     }
   };
 
