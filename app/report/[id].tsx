@@ -59,12 +59,12 @@ export default function ReportDetailScreen() {
       id: Math.random().toString(36).substring(7),
       date: new Date().toISOString().split('T')[0],
       amount: '',
-      category: CATEGORIES[0],
-      note: '',
+      category: '',
     };
-    const updated = { ...report, items: [...report.items, newItem] };
+    const updated = { ...report, items: [newItem, ...report.items] };
     setReport(updated);
     updateReport(updated);
+  };
   };
 
   const updateItem = (itemId: string, field: keyof ExpenseItem, value: string) => {
