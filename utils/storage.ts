@@ -7,6 +7,7 @@ export interface ExpenseItem {
   date: string;
   amount: string;
   category: string;
+  note?: string;
   receiptUri?: string;
 }
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   View, Text, StyleSheet, ScrollView, TextInput, 
   TouchableOpacity, Image, Platform, Alert 
@@ -6,8 +6,23 @@ import {
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as MailComposer from 'expo-mail-composer';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
+import * as XLSX from 'xlsx';
+import { Picker } from '@react-native-picker/picker';
 import { getReportById, updateReport, ExpenseReport, ExpenseItem } from '../../utils/storage';
-import { ArrowLeft, Plus, Trash2, Camera, Send } from 'lucide-react-native';
+import { ArrowLeft, Plus, Trash2, Camera, Send, FileText, Download } from 'lucide-react-native';
+
+const CATEGORIES = [
+  'Travel - Airfare',
+  'Travel - Taxi',
+  'Travel - Meals',
+  'Entertainment',
+  'Prepaid',
+  'Subscription',
+  'Office Supplies',
+  'Other'
+];
 
 export default function ReportDetailScreen() {
   const { id } = useLocalSearchParams();
@@ -29,13 +44,22 @@ export default function ReportDetailScreen() {
     }
   };
 
+  const totalAmount = useMemo(() => {
+    if (!report) return 0;
+    return report.items.reduce((sum, item) => {
+      const amount = parseFloat(item.amount) || 0;
+      return sum + amount;
+    }, 0);
+  }, [report]);
+
   const addItem = () => {
     if (!report) return;
     const newItem: ExpenseItem = {
       id: Math.random().toString(36).substring(7),
       date: new Date().toISOString().split('T')[0],
       amount: '',
-      category: '',
+      category: CATEGORIES[0],
+      note: '',
     };
     const updated = { ...report, items: [...report.items, newItem] };
     setReport(updated);
@@ -44,6 +68,17 @@ export default function ReportDetailScreen() {
 
   const updateItem = (itemId: string, field: keyof ExpenseItem, value: string) => {
     if (!report) return;
+    
+    // For amount, ensure it's a valid number format for two decimals if needed
+    if (field === 'amount') {
+      // Allow only numbers and one decimal point
+      const sanitized = value.replace(/[^0-9.]/g, '');
+      const parts = sanitized.split('.');
+      if (parts.length > 2) return; // Prevent multiple decimal points
+      if (parts[1] && parts[1].length > 2) return; // Limit to 2 decimal places
+      value = sanitized;
+    }
+
     const updatedItems = report.items.map(item => 
       item.id === itemId ? { ...item, [field]: value } : item
     );
@@ -79,6 +114,100 @@ export default function ReportDetailScreen() {
     }
   };
 
+  const exportToPDF = async () => {
+    if (!report) return;
+
+    const html = `
+      <html>
+        <head>
+          <style>
+            body { font-family: 'Helvetica', sans-serif; padding: 20px; }
+            h1 { color: #333; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+            th { backgroundColor: #f2f2f2; }
+            .total { margin-top: 20px; font-weight: bold; font-size: 1.2em; text-align: right; }
+          </style>
+        </head>
+        <body>
+          <h1>Expense Report: ${report.title}</h1>
+          <p>Date: ${new Date(report.createdAt).toLocaleDateString()}</p>
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Category</th>
+                <th>Note</th>
+                <th>Amount (USD)</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${report.items.map(item => `
+                <tr>
+                  <td>${item.date}</td>
+                  <td>${item.category}</td>
+                  <td>${item.note || ''}</td>
+                  <td>$${parseFloat(item.amount || '0').toFixed(2)}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+          <div class="total">Total: $${totalAmount.toFixed(2)}</div>
+        </body>
+      </html>
+    `;
+
+    try {
+      const { uri } = await Print.printToFileAsync({ html });
+      if (Platform.OS === 'ios') {
+        await Sharing.shareAsync(uri);
+      } else {
+        await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Export PDF' });
+      }
+    } catch (error) {
+      Alert.alert('Error', 'Failed to generate PDF');
+    }
+  };
+
+  const exportToExcel = async () => {
+    if (!report) return;
+
+    const data = report.items.map(item => ({
+      Date: item.date,
+      Category: item.category,
+      Note: item.note || '',
+      'Amount (USD)': parseFloat(item.amount || '0').toFixed(2)
+    }));
+
+    // Add total row
+    data.push({
+      Date: 'TOTAL',
+      Category: '',
+      Note: '',
+      'Amount (USD)': totalAmount.toFixed(2)
+    });
+
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Expenses");
+    
+    const wbout = XLSX.write(wb, { type: 'base64', bookType: "xlsx" });
+    const uri = Platform.OS === 'web' 
+      ? `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${wbout}`
+      : `${Print.cacheDirectory}ExpenseReport_${report.id}.xlsx`;
+
+    if (Platform.OS === 'web') {
+      const link = document.createElement('a');
+      link.href = uri;
+      link.download = `ExpenseReport_${report.title.replace(/\s+/g, '_')}.xlsx`;
+      link.click();
+    } else {
+      // For native, we'd need expo-file-system to write the file, but we can try sharing the base64 if supported
+      // Better approach for native is to use expo-file-system
+      Alert.alert('Note', 'Excel export is best supported on Web. For mobile, please use PDF export.');
+    }
+  };
+
   const submitForApproval = async () => {
     if (!report || !approverEmail) {
       Alert.alert('Error', 'Please provide an approver email.');
@@ -86,10 +215,10 @@ export default function ReportDetailScreen() {
     }
 
     const reportContent = report.items.map(item => (
-      `Date: ${item.date}\nCategory: ${item.category}\nAmount: $${item.amount}\n-------------------`
+      `Date: ${item.date}\nCategory: ${item.category}\nAmount: $${parseFloat(item.amount || '0').toFixed(2)}\nNote: ${item.note || 'N/A'}\n-------------------`
     )).join('\n');
 
-    const body = `Hi,\n\nPlease find the expense report details for ${report.title} below:\n\n${reportContent}\n\nTotal Items: ${report.items.length}\n\nSubmitted via Expense Report App.`;
+    const body = `Hi,\n\nPlease find the expense report details for ${report.title} below:\n\n${reportContent}\n\nTotal Amount: $${totalAmount.toFixed(2)}\n\nSubmitted via Expense Report App.`;
 
     const isAvailable = await MailComposer.isAvailableAsync();
     if (isAvailable) {
@@ -99,7 +228,6 @@ export default function ReportDetailScreen() {
         body: body,
       });
     } else {
-      // Fallback for web if MailComposer is not fully supported or restricted
       const mailtoUrl = `mailto:${approverEmail}?subject=${encodeURIComponent(`Expense Report Approval Request: ${report.title}`)}&body=${encodeURIComponent(body)}`;
       if (Platform.OS === 'web') {
         window.location.href = mailtoUrl;
@@ -125,6 +253,17 @@ export default function ReportDetailScreen() {
         <View style={styles.infoSection}>
           <Text style={styles.reportTitle}>{report.title}</Text>
           <Text style={styles.reportDate}>Created on {new Date(report.createdAt).toLocaleDateString()}</Text>
+          
+          <View style={styles.actionButtonsRow}>
+            <TouchableOpacity style={[styles.exportButton, { backgroundColor: '#e9ecef' }]} onPress={exportToPDF}>
+              <FileText size={18} color="#495057" />
+              <Text style={styles.exportButtonText}>PDF</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.exportButton, { backgroundColor: '#e9ecef' }]} onPress={exportToExcel}>
+              <Download size={18} color="#495057" />
+              <Text style={styles.exportButtonText}>Excel</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         <View style={styles.sectionHeader}>
@@ -162,12 +301,12 @@ export default function ReportDetailScreen() {
                 )}
               </View>
               <View style={[styles.inputGroup, { flex: 0.5, marginLeft: 10 }]}>
-                <Text style={styles.label}>Amount ($)</Text>
+                <Text style={styles.label}>Amount (USD)</Text>
                 <TextInput
                   style={styles.input}
                   value={item.amount}
                   onChangeText={(text) => updateItem(item.id, 'amount', text)}
-                  keyboardType="numeric"
+                  keyboardType="decimal-pad"
                   placeholder="0.00"
                 />
               </View>
@@ -175,11 +314,28 @@ export default function ReportDetailScreen() {
 
             <View style={styles.inputGroup}>
               <Text style={styles.label}>Category</Text>
+              <View style={styles.pickerContainer}>
+                <Picker
+                  selectedValue={item.category}
+                  onValueChange={(value) => updateItem(item.id, 'category', value)}
+                  style={styles.picker}
+                >
+                  {CATEGORIES.map((cat) => (
+                    <Picker.Item key={cat} label={cat} value={cat} />
+                  ))}
+                </Picker>
+              </View>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Additional Note (Optional)</Text>
               <TextInput
-                style={styles.input}
-                value={item.category}
-                onChangeText={(text) => updateItem(item.id, 'category', text)}
-                placeholder="e.g. Meals, Travel"
+                style={[styles.input, styles.textArea]}
+                value={item.note}
+                onChangeText={(text) => updateItem(item.id, 'note', text)}
+                placeholder="Enter details..."
+                multiline
+                numberOfLines={2}
               />
             </View>
 
@@ -200,6 +356,11 @@ export default function ReportDetailScreen() {
             )}
           </View>
         ))}
+
+        <View style={styles.totalSection}>
+          <Text style={styles.totalLabel}>Total Amount:</Text>
+          <Text style={styles.totalValue}>${totalAmount.toFixed(2)}</Text>
+        </View>
 
         <View style={styles.approvalSection}>
           <Text style={styles.sectionTitle}>Approval</Text>
@@ -241,6 +402,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 18,
     fontWeight: 'bold',
+    color: '#007bff',
   },
   scrollContent: {
     padding: 20,
@@ -257,6 +419,25 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
     marginTop: 5,
+    marginBottom: 15,
+  },
+  actionButtonsRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  exportButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#dee2e6',
+  },
+  exportButtonText: {
+    marginLeft: 6,
+    fontWeight: '600',
+    color: '#495057',
   },
   sectionHeader: {
     flexDirection: 'row',
@@ -311,6 +492,21 @@ const styles = StyleSheet.create({
     padding: 10,
     fontSize: 16,
   },
+  textArea: {
+    minHeight: 60,
+    textAlignVertical: 'top',
+  },
+  pickerContainer: {
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 6,
+    backgroundColor: '#fff',
+    overflow: 'hidden',
+  },
+  picker: {
+    height: Platform.OS === 'ios' ? 150 : 50,
+    width: '100%',
+  },
   cardActions: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -336,8 +532,27 @@ const styles = StyleSheet.create({
     marginTop: 10,
     resizeMode: 'cover',
   },
+  totalSection: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    padding: 15,
+    backgroundColor: '#e9ecef',
+    borderRadius: 8,
+    marginBottom: 20,
+  },
+  totalLabel: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginRight: 10,
+  },
+  totalValue: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#007bff',
+  },
   approvalSection: {
-    marginTop: 20,
+    marginTop: 10,
     paddingTop: 20,
     borderTopWidth: 1,
     borderTopColor: '#eee',
@@ -359,3 +574,4 @@ const styles = StyleSheet.create({
     marginLeft: 10,
   },
 });
+
