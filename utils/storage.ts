@@ -1,13 +1,14 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const REPORTS_KEY = '@expense_reports';
-
 export interface ExpenseItem {
   id: string;
   date: string;
   amount: string;
   category: string;
   note?: string;
+  receiptUri?: string;
+}
   receiptUri?: string;
 }
 

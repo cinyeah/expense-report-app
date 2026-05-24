@@ -8,7 +8,6 @@ import * as ImagePicker from 'expo-image-picker';
 import * as MailComposer from 'expo-mail-composer';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
-import * as FileSystem from 'expo-file-system';
 import * as XLSX from 'xlsx';
 import { Picker } from '@react-native-picker/picker';
 import { getReportById, updateReport, ExpenseReport, ExpenseItem } from '../../utils/storage';
@@ -59,7 +58,8 @@ export default function ReportDetailScreen() {
       id: Math.random().toString(36).substring(7),
       date: new Date().toISOString().split('T')[0],
       amount: '',
-      category: '',
+      category: CATEGORIES[0],
+      note: '',
     };
     const updated = { ...report, items: [newItem, ...report.items] };
     setReport(updated);
@@ -68,17 +68,6 @@ export default function ReportDetailScreen() {
 
   const updateItem = (itemId: string, field: keyof ExpenseItem, value: string) => {
     if (!report) return;
-    
-    // For amount, ensure it's a valid number format for two decimals if needed
-    if (field === 'amount') {
-      // Allow only numbers and one decimal point
-      const sanitized = value.replace(/[^0-9.]/g, '');
-      const parts = sanitized.split('.');
-      if (parts.length > 2) return; // Prevent multiple decimal points
-      if (parts[1] && parts[1].length > 2) return; // Limit to 2 decimal places
-      value = sanitized;
-    }
-
     const updatedItems = report.items.map(item => 
       item.id === itemId ? { ...item, [field]: value } : item
     );
@@ -174,15 +163,15 @@ export default function ReportDetailScreen() {
     `;
 
     try {
-      const { uri, base64 } = await Print.printToFileAsync({ html, base64: Platform.OS === 'web' });
-      
-      if (Platform.OS === 'web' && base64) {
+      if (Platform.OS === 'web') {
+        const { base64 } = await Print.printToFileAsync({ html, base64: true });
         const link = document.createElement('a');
         link.href = `data:application/pdf;base64,${base64}`;
         link.download = `${report.title.replace(/\s+/g, '_')}.pdf`;
         link.click();
       } else {
-        await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Save PDF' });
+        const { uri } = await Print.printToFileAsync({ html });
+        await Sharing.shareAsync(uri);
       }
     } catch (error) {
       Alert.alert('Error', 'Failed to generate PDF');
@@ -192,47 +181,27 @@ export default function ReportDetailScreen() {
   const exportToExcel = async () => {
     if (!report) return;
 
-    // Create a worksheet where numeric values are actual numbers
-    const rows = report.items.map(item => [
-      item.date,
-      item.category,
-      item.note || '',
-      parseFloat(item.amount || '0')
-    ]);
+    const data = report.items.map(item => ({
+      'Date': item.date,
+      'Category': item.category,
+      'Note': item.note || '',
+      'Amount (USD)': parseFloat(item.amount || '0')
+    }));
 
-    // Add header and total
-    const data = [
-      ["Date", "Category", "Note", "Amount (USD)"],
-      ...rows,
-      ["TOTAL", "", "", totalAmount]
-    ];
+    // Add total row
+    data.push({
+      'Date': 'TOTAL',
+      'Category': '',
+      'Note': '',
+      'Amount (USD)': totalAmount as any
+    });
 
-    const ws = XLSX.utils.aoa_to_sheet(data);
-
-    // Set column widths
-    ws['!cols'] = [
-      { wch: 15 }, // Date
-      { wch: 20 }, // Category
-      { wch: 40 }, // Note
-      { wch: 15 }  // Amount
-    ];
-
-    // Add basic number formatting for the amount column (D)
-    const range = XLSX.utils.decode_range(ws['!ref'] || "A1");
-    for (let i = 1; i <= range.e.r; i++) {
-      const cell = ws[XLSX.utils.encode_cell({ r: i, c: 3 })];
-      if (cell && typeof cell.v === 'number') {
-        cell.z = '"$"#,##0.00';
-      }
-    }
-
+    const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Expenses");
     
     const wbout = XLSX.write(wb, { type: 'base64', bookType: "xlsx" });
-    const uri = Platform.OS === 'web' 
-      ? `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${wbout}`
-      : '';
+    const uri = `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${wbout}`;
 
     if (Platform.OS === 'web') {
       const link = document.createElement('a');
@@ -293,11 +262,11 @@ export default function ReportDetailScreen() {
           <View style={styles.actionButtonsRow}>
             <TouchableOpacity style={[styles.exportButton, { backgroundColor: '#e9ecef' }]} onPress={exportToPDF}>
               <FileText size={18} color="#495057" />
-              <Text style={styles.exportButtonText}>PDF</Text>
+              <Text style={styles.exportButtonText}>Download PDF</Text>
             </TouchableOpacity>
             <TouchableOpacity style={[styles.exportButton, { backgroundColor: '#e9ecef' }]} onPress={exportToExcel}>
               <Download size={18} color="#495057" />
-              <Text style={styles.exportButtonText}>Excel</Text>
+              <Text style={styles.exportButtonText}>Download Excel</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -342,7 +311,7 @@ export default function ReportDetailScreen() {
                   style={styles.input}
                   value={item.amount}
                   onChangeText={(text) => updateItem(item.id, 'amount', text)}
-                  keyboardType="decimal-pad"
+                  keyboardType="numeric"
                   placeholder="0.00"
                 />
               </View>
@@ -364,14 +333,12 @@ export default function ReportDetailScreen() {
             </View>
 
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Additional Note (Optional)</Text>
+              <Text style={styles.label}>Note</Text>
               <TextInput
-                style={[styles.input, styles.textArea]}
+                style={styles.input}
                 value={item.note}
                 onChangeText={(text) => updateItem(item.id, 'note', text)}
-                placeholder="Enter details..."
-                multiline
-                numberOfLines={2}
+                placeholder="e.g. Lunch with client"
               />
             </View>
 
@@ -438,7 +405,6 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#007bff',
   },
   scrollContent: {
     padding: 20,
@@ -528,10 +494,6 @@ const styles = StyleSheet.create({
     padding: 10,
     fontSize: 16,
   },
-  textArea: {
-    minHeight: 60,
-    textAlignVertical: 'top',
-  },
   pickerContainer: {
     borderWidth: 1,
     borderColor: '#ddd',
@@ -540,7 +502,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   picker: {
-    height: Platform.OS === 'ios' ? 150 : 50,
+    height: 50,
     width: '100%',
   },
   cardActions: {
